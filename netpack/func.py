@@ -1,10 +1,12 @@
 from bs4 import BeautifulSoup
 import requests
-import socket
 import ipaddress
-
-
-
+import socket
+import time
+import struct
+import random
+from contextlib import closing
+import concurrent.futures
 
 
 class NetPack(object):
@@ -29,7 +31,7 @@ class NetPack(object):
     SOCKET_TIMEOUT = 5
 
     @staticmethod
-    def is_valid_ipv4(ip: str) -> bool:
+    def _is_valid_ipv4(ip: str) -> bool:
         try:
             ipaddress.IPv4Address(ip)
             return True
@@ -96,3 +98,158 @@ class NetPack(object):
             radb_information += item.text + '\r\r\n\n'
 
         return radb_information
+
+    @staticmethod
+    def _calculate_checksum(data):
+        # Calculate the number of 16-bit words in the data
+        count_to = (len(data) // 2) * 2
+        total = 0
+        count = 0
+
+        # Iterate through each pair of bytes (16 bits) in the data
+        while count < count_to:
+            # Combine the two bytes into a single 16-bit word
+            this_val = data[count + 1] * 256 + data[count]
+            # Add the 16-bit word to the running total
+            total += this_val
+            # Ensure the total doesn't exceed 32 bits
+            total &= 0xffffffff
+            # Move to the next pair of bytes
+            count += 2
+
+        # If there's an odd number of bytes, add the last byte to the total
+        if count_to < len(data):
+            total += data[len(data) - 1]
+            total &= 0xffffffff
+
+        # Fold the 32-bit total into 16 bits by adding the high 16 bits to the low 16 bits
+        total = (total >> 16) + (total & 0xffff)
+        total += (total >> 16)
+
+        # Take the one's complement of the final 16-bit total
+        answer = ~total
+        # Ensure the answer doesn't exceed 16 bits
+        answer &= 0xffff
+
+        return answer
+
+    @staticmethod
+    def _icmp_ping(host, packet_size, interval, timeout, packet_num):
+        # Sends ICMP echo requests to the specified host and returns the average latency and success rate as a tuple
+        if packet_size < 8:
+            packet_size = 8
+        payload = b'\x00' * (packet_size-8)
+        icmp_protocol = socket.getprotobyname("icmp")
+        icmp_echo = 8
+        packet_id = random.randint(1, 0xffff)
+        packet = struct.pack("!BBHHH", icmp_echo, 0, 0, packet_id, 1) + payload
+        # Adds the ICMP checksum to the packet
+        packet = struct.pack("!BBHHH", icmp_echo, 0, socket.htons(NetPack._calculate_checksum(packet)), packet_id, 1) + payload
+
+        sent_count = 0
+        received_count = 0
+        total_latency = 0
+
+        # Sends 10 ICMP echo requests
+        for _ in range(packet_num):
+            # Creates a raw socket for sending ICMP packets
+            with closing(socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp_protocol)) as sock:
+                # Sets the timeout for the socket
+                sock.settimeout(timeout)
+                # Sends the ICMP packet to the specified host
+                sock.sendto(packet, (host, 1))
+
+                # Records the start time and counts the packets being sent out.
+                sent_count += 1
+                start_time = time.time()
+
+                try:
+                    # Receives the ICMP response from the host
+                    _, addr = sock.recvfrom(1024)
+                    end_time = time.time()
+                    # Calculates the latency and counts the received packets
+                    received_count += 1
+                    total_latency += end_time - start_time
+                except socket.timeout:
+                    # If no response is received within the timeout period, ignores the packet
+                    pass
+
+                # Waits for the specified interval before sending the next packet
+                time.sleep(max(0, interval - (time.time() - start_time)))
+
+        # Calculates the average latency and success rate
+        return (total_latency / received_count) * 1000 if received_count > 0 else None, received_count / sent_count * 100
+
+    @staticmethod
+    def _tcp_ping(host, packet_size, interval, timeout, packet_num):
+        # Initialize variables to keep track of packets sent, received and total latency
+        sent_count = 0
+        received_count = 0
+        total_latency = 0
+
+        # Loop through 10 iterations to send packets to the target host
+        for _ in range(packet_num):
+            # Create a TCP socket object and set the timeout
+            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+                sock.settimeout(timeout)
+                # Increment the packet counter and record the start time
+                sent_count += 1
+                start_time = time.time()
+
+                try:
+                    # Attempt to connect to the target host on port 33434
+                    sock.connect((host, 33434))
+                    # Record the end time and calculate the latency
+                    end_time = time.time()
+                    received_count += 1
+                    total_latency += end_time - start_time
+                # Handle timeout and socket error exceptions
+                except socket.timeout:
+                    pass
+                except socket.error:
+                    pass
+
+                # Wait for the specified interval time before sending the next packet
+                time.sleep(max(0, interval - (time.time() - start_time)))
+
+        # Calculate the average latency and packet loss percentage and return as a tuple
+        return (total_latency / received_count) * 1000 if received_count > 0 else None, received_count / sent_count * 100
+
+    @staticmethod
+    def ping(host, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+        # Try to get address information for the given host
+        try:
+            socket.getaddrinfo(host, None, socket.AF_INET6)
+            address_family = socket.AF_INET6  # Use IPv6 address family if available
+        except socket.gaierror:
+            address_family = socket.AF_INET  # Otherwise, use IPv4 address family
+
+        # Depending on the protocol, call the corresponding ping function
+        if protocol.lower() == "icmp":
+            # ICMP protocol is only supported for IPv4
+            if address_family == socket.AF_INET6:
+                raise ValueError("ICMP is not supported for IPv6 addresses in this implementation.")
+            return NetPack._icmp_ping(host, packet_size, interval, timeout, packet_num)
+        elif protocol.lower() == "tcp":
+            # Use TCP protocol for both IPv4 and IPv6
+            return NetPack._tcp_ping(host, packet_size, interval, timeout, packet_num)
+        else:
+            # Raise an error if an unsupported protocol is given
+            raise ValueError("Unsupported protocol. Please use 'icmp' or 'tcp'.")
+
+    @staticmethod
+    def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+        multiping_results = {}
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Submit ping tasks for each host
+            ping_tasks = {executor.submit(NetPack.ping, host, packet_size, protocol, interval, timeout, packet_num): host for host in hosts}
+            for task in concurrent.futures.as_completed(ping_tasks):
+                host = ping_tasks[task]
+                try:
+                    # Get the ping result and add it to the results dictionary
+                    latency, success_rate = task.result()
+                    multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
+                except Exception as e:
+                    # Handle any exceptions that occurred during the ping task
+                    multiping_results[host] = {'success_rate': 0, 'latency': None}
+        return multiping_results
