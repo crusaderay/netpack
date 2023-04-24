@@ -187,18 +187,36 @@ class NetPack(object):
         received_count = 0
         total_latency = 0
 
-        # Loop through 10 iterations to send packets to the target host
-        for _ in range(packet_num):
-            # Create a TCP socket object and set the timeout
-            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-                sock.settimeout(timeout)
+        # Create a TCP socket object and set the timeout
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+
+            # Loop through the packet_num iterations to send packets to the target host
+            for _ in range(packet_num):
                 # Increment the packet counter and record the start time
                 sent_count += 1
                 start_time = time.time()
 
+                # Construct the TCP ACK packet
+                tcp_header = struct.pack('!HHIIBBHHH', 12345, 0, 0, 0, 5, 16, 8192, 0, 0)
+                tcp_header += b'\x00' * (packet_size - len(tcp_header))
+
+                # Set the ACK flag in the TCP header
+                tcp_header = struct.pack('!BBHI', tcp_header[0], 0x10, 0, 12345) + tcp_header[4:]
+
+                # Calculate the checksum for the packet
+                ip_header = struct.pack('!BBHHHBBH4s4s', 69, 0, len(tcp_header) + 20, 12345, 0, 64, 6, 0,
+                                        socket.inet_aton('127.0.0.1'), socket.inet_aton(host))
+                checksum = NetPack._calculate_checksum(ip_header + tcp_header)
+                tcp_header = tcp_header[:16] + struct.pack('H', checksum) + tcp_header[18:]
+
                 try:
-                    # Attempt to connect to the target host on port 33434
-                    sock.connect((host, 33434))
+                    # Send the packet to the target host on port 80
+                    sock.sendto(tcp_header, (host, 80))
+
+                    # Wait for the response packet
+                    response_packet, addr = sock.recvfrom(packet_size)
+
                     # Record the end time and calculate the latency
                     end_time = time.time()
                     received_count += 1
@@ -206,8 +224,9 @@ class NetPack(object):
                 # Handle timeout and socket error exceptions
                 except socket.timeout:
                     pass
-                except socket.error:
-                    pass
+                    # print(f"Socket timeout occurred.")
+                except socket.error as e:
+                    print(f"Socket error occurred: {e}")
 
                 # Wait for the specified interval time before sending the next packet
                 time.sleep(max(0, interval - (time.time() - start_time)))
@@ -251,5 +270,6 @@ class NetPack(object):
                     multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
                 except Exception as e:
                     # Handle any exceptions that occurred during the ping task
+                    print(e)
                     multiping_results[host] = {'success_rate': 0, 'latency': None}
         return multiping_results

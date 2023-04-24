@@ -35,7 +35,7 @@ The NetPack package contains the following classes and methods:
 #### NetPack.radb(ip: str) -> str
 * This is a static method that takes an IPv4 address as an input and return the result from RADB
 
-#### ping(host, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5) -> tuple
+#### NetPack.ping(host, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5) -> tuple
 * The ping() method can be used to ping a single host:
     * Arguments
         * host: the hostname or IP address of the host to ping.
@@ -45,7 +45,7 @@ The NetPack package contains the following classes and methods:
         * timeout: the time (in seconds) to wait for a response before considering the packet lost. Default is 1.
         * packet_num: the number of packets to send. Default is 5.
 
-#### multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5) -> dict
+#### NetPack.multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5) -> dict
 * The multiple_ping() method can be used to ping multiple hosts in parallel, This will return a dictionary where each key is a host from the hosts list and each value is a dictionary containing the average latency and success rate of the ping test.
     * Arguments
         * The arguments for multiple_ping() are the same as for ping(), except that they are used for all hosts in the hosts list.
