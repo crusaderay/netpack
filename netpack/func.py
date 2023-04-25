@@ -1,3 +1,5 @@
+import threading
+
 from bs4 import BeautifulSoup
 import requests
 import ipaddress
@@ -31,7 +33,7 @@ class NetPack(object):
     SOCKET_TIMEOUT = 5
 
     @staticmethod
-    def _is_valid_ipv4(ip: str) -> bool:
+    def is_valid_ipv4(ip: str) -> bool:
         try:
             ipaddress.IPv4Address(ip)
             return True
@@ -259,17 +261,25 @@ class NetPack(object):
     @staticmethod
     def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
         multiping_results = {}
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit ping tasks for each host
-            ping_tasks = {executor.submit(NetPack.ping, host, packet_size, protocol, interval, timeout, packet_num): host for host in hosts}
-            for task in concurrent.futures.as_completed(ping_tasks):
-                host = ping_tasks[task]
-                try:
-                    # Get the ping result and add it to the results dictionary
-                    latency, success_rate = task.result()
-                    multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
-                except Exception as e:
-                    # Handle any exceptions that occurred during the ping task
-                    print(e)
-                    multiping_results[host] = {'success_rate': 0, 'latency': None}
+
+        # Define a function to ping a host and store the result in the results dictionary
+        def ping_host(host):
+            try:
+                latency, success_rate = NetPack.ping(host, packet_size, protocol, interval, timeout, packet_num)
+                multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
+            except Exception as e:
+                print(e)
+                multiping_results[host] = {'success_rate': 0, 'latency': None}
+
+        # Create a thread for each host and start them all simultaneously
+        threads = []
+        for host in hosts:
+            t = threading.Thread(target=ping_host, args=(host,))
+            threads.append(t)
+            t.start()
+
+        # Wait for all threads to finish before returning the results dictionary
+        for t in threads:
+            t.join()
+
         return multiping_results

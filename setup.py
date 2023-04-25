@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='netpackAIO',
-    version='0.0.4',
+    version='0.0.5',
     description='A Python package for performing network-related tasks',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
