@@ -1,3 +1,4 @@
+import asyncio
 import threading
 
 from bs4 import BeautifulSoup
@@ -258,28 +259,45 @@ class NetPack(object):
             # Raise an error if an unsupported protocol is given
             raise ValueError("Unsupported protocol. Please use 'icmp' or 'tcp'.")
 
+    # @staticmethod
+    # def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+    #     multiping_results = {}
+    #
+    #     # Define a function to ping a host and store the result in the results dictionary
+    #     def ping_host(host):
+    #         try:
+    #             latency, success_rate = NetPack.ping(host, packet_size, protocol, interval, timeout, packet_num)
+    #             multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
+    #         except Exception as e:
+    #             print(e)
+    #             multiping_results[host] = {'success_rate': 0, 'latency': None}
+    #
+    #     # Create a thread for each host and start them all simultaneously
+    #     threads = []
+    #     for host in hosts:
+    #         t = threading.Thread(target=ping_host, args=(host,))
+    #         threads.append(t)
+    #         t.start()
+    #
+    #     # Wait for all threads to finish before returning the results dictionary
+    #     for t in threads:
+    #         t.join()
+    #
+    #     return multiping_results
     @staticmethod
-    def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
-        multiping_results = {}
+    async def ping_async(host, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+        # Call the ping function with the given arguments and return the result as a dictionary
+        latency, success_rate = await asyncio.to_thread(NetPack.ping, host, packet_size, protocol, interval, timeout,
+                                                        packet_num)
+        return {'success_rate': success_rate, 'latency': latency}
 
-        # Define a function to ping a host and store the result in the results dictionary
-        def ping_host(host):
-            try:
-                latency, success_rate = NetPack.ping(host, packet_size, protocol, interval, timeout, packet_num)
-                multiping_results[host] = {'success_rate': success_rate, 'latency': latency}
-            except Exception as e:
-                print(e)
-                multiping_results[host] = {'success_rate': 0, 'latency': None}
+    @staticmethod
+    async def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+        # Create a list of tasks to ping each host
+        tasks = [NetPack.ping_async(host, packet_size, protocol, interval, timeout, packet_num) for host in hosts]
 
-        # Create a thread for each host and start them all simultaneously
-        threads = []
-        for host in hosts:
-            t = threading.Thread(target=ping_host, args=(host,))
-            threads.append(t)
-            t.start()
+        # Run the tasks concurrently and wait for all of them to finish
+        results = await asyncio.gather(*tasks)
 
-        # Wait for all threads to finish before returning the results dictionary
-        for t in threads:
-            t.join()
-
-        return multiping_results
+        # Combine the results into a dictionary keyed by the host address
+        return {host: result for host, result in zip(hosts, results)}
