@@ -1,14 +1,15 @@
 import threading
-
 from bs4 import BeautifulSoup
 import requests
 import ipaddress
 import socket
-import time
 import struct
 import random
 from contextlib import closing
-import concurrent.futures
+import platform
+import subprocess
+import re
+import time
 
 
 class NetPack(object):
@@ -136,7 +137,52 @@ class NetPack(object):
         return answer
 
     @staticmethod
-    def _icmp_ping(host, packet_size, interval, timeout, packet_num):
+    def _icmp_ping_os(host, packet_size, interval, timeout, packet_num):
+        # Sends ICMP echo requests to the specified host and returns the average latency and success rate as a tuple
+
+        # Determine the operating system
+        system = platform.system()
+
+        if system == 'Windows':
+            # For Windows
+            command = ['ping', '-n', str(packet_num), '-l', str(packet_size), '-w', str(int(timeout * 1000)), host]
+            output = subprocess.run(command, capture_output=True, text=True)
+            result = output.stdout
+        elif system == 'Darwin':
+            # For macOS
+            command = ['ping', '-c', str(packet_num), '-s', str(packet_size), '-i', str(interval), '-t', str(timeout),
+                       host]
+            output = subprocess.run(command, capture_output=True, text=True)
+            result = output.stdout
+        elif system == 'Linux':
+            # For Linux
+            command = ['ping', '-c', str(packet_num), '-s', str(packet_size), '-i', str(interval), '-W', str(timeout),
+                       host]
+            output = subprocess.run(command, capture_output=True, text=True)
+            result = output.stdout
+        else:
+            raise OSError(f"Unsupported operating system: {system}")
+
+        # Parse the ping result to calculate average latency and success rate
+        latency_sum = 0
+        received_count = 0
+        lines = result.split('\n')
+        for line in lines:
+            if 'time=' in line:
+                try:
+                    latency = float(re.search(r'time=([0-9.]+)', line).group(1))
+                    latency_sum += latency
+                    received_count += 1
+                except (ValueError, AttributeError):
+                    pass
+
+        average_latency = (latency_sum / received_count) if received_count > 0 else None
+        success_rate = (received_count / packet_num) * 100
+
+        return average_latency, success_rate
+
+    @staticmethod
+    def _icmp_ping_sock(host, packet_size, interval, timeout, packet_num):
         # Sends ICMP echo requests to the specified host and returns the average latency and success rate as a tuple
         if packet_size < 8:
             packet_size = 8
@@ -237,7 +283,7 @@ class NetPack(object):
         return (total_latency / received_count) * 1000 if received_count > 0 else None, received_count / sent_count * 100
 
     @staticmethod
-    def ping(host, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+    def ping(host, ping_type='os', packet_size=64, protocol="icmp", interval=0.5, timeout=1, packet_num=5):
         # Try to get address information for the given host
         try:
             socket.getaddrinfo(host, None, socket.AF_INET6)
@@ -250,7 +296,10 @@ class NetPack(object):
             # ICMP protocol is only supported for IPv4
             if address_family == socket.AF_INET6:
                 raise ValueError("ICMP is not supported for IPv6 addresses in this implementation.")
-            return NetPack._icmp_ping(host, packet_size, interval, timeout, packet_num)
+            if ping_type == 'sock':
+                return NetPack._icmp_ping_sock(host, packet_size, interval, timeout, packet_num)
+            else:
+                return NetPack._icmp_ping_os(host, packet_size, interval, timeout, packet_num)
         elif protocol.lower() == "tcp":
             # Use TCP protocol for both IPv4 and IPv6
             return NetPack._tcp_ping(host, packet_size, interval, timeout, packet_num)
@@ -259,17 +308,14 @@ class NetPack(object):
             raise ValueError("Unsupported protocol. Please use 'icmp' or 'tcp'.")
 
     @staticmethod
-    def multiple_ping(hosts, packet_size=64, protocol="icmp", interval=0.2, timeout=1, packet_num=5):
+    def multiple_ping(hosts, ping_type='os', packet_size=64, protocol="icmp", interval=0.5, timeout=1, packet_num=5):
         multiping_results = {}
 
         # Define a function to ping a host and store the result in the results dictionary
         def ping_host(ip):
-            try:
-                latency, success_rate = NetPack.ping(ip, packet_size, protocol, interval, timeout, packet_num)
-                multiping_results[ip] = {'success_rate': success_rate, 'latency': latency}
-            except Exception as e:
-                print(e)
-                multiping_results[ip] = {'success_rate': 0, 'latency': None}
+
+            latency, success_rate = NetPack.ping(ip, ping_type, packet_size, protocol, interval, timeout, packet_num)
+            multiping_results[ip] = {'success_rate': success_rate, 'latency': latency}
 
         # Create a thread for each host and start them all simultaneously
         threads = []
